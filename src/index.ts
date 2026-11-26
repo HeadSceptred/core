@@ -2187,3 +2187,11 @@ export type {
   WebSocketTransactionFeedOptions,
   WebSocketTransactionFeedHandle,
 } from "./transaction/transactionDashboard";
+
+// ─── Runtime Environment Abstraction (#81) ──────────────────────────────────
+export {
+  isBrowser,
+  isNode,
+  getEnvironment,
+} from "./shared/environment";
+export type { RuntimeEnvironment } from "./shared/environment";
