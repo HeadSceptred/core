@@ -27,6 +27,8 @@ export interface DecodedContractError {
   remediation?: string;
   /** The original, untouched error value. */
   raw: unknown;
+  /** Raw diagnostic context (events, data, logs, or error payload) when present. */
+  diagnostic?: unknown;
 }
 
 // ─── Factory contract (#391) ──────────────────────────────────────────────────
@@ -230,9 +232,10 @@ function extractCandidateCodes(error: unknown): string[] {
       if (obj.code !== undefined) pushNumericOrSymbol(codes, obj.code);
       if (obj.errorCode !== undefined)
         pushNumericOrSymbol(codes, obj.errorCode);
-      if (
-        typeof obj.status === "string" &&
-        obj.status === "error" &&
+
+      if (typeof obj.error === "string") {
+        collectFromMessage(codes, obj.error);
+      } else if (
         obj.error !== null &&
         typeof obj.error === "object"
       ) {
@@ -241,8 +244,13 @@ function extractCandidateCodes(error: unknown): string[] {
         if (typeof inner.message === "string")
           collectFromMessage(codes, inner.message);
       }
+
       if (typeof obj.message === "string")
         collectFromMessage(codes, obj.message);
+      if (typeof obj.detail === "string")
+        collectFromMessage(codes, obj.detail);
+      if (typeof obj.reason === "string")
+        collectFromMessage(codes, obj.reason);
     }
   } catch {
     // Malformed input must never break decoding.
@@ -282,12 +290,36 @@ function dedupe(codes: string[]): string[] {
   return [...new Set(codes)];
 }
 
+function extractDiagnosticContext(error: unknown): unknown {
+  if (error !== null && typeof error === "object") {
+    try {
+      const obj = error as Record<string, unknown>;
+      if (obj.diagnostic !== undefined) return obj.diagnostic;
+      if (obj.diagnostics !== undefined) return obj.diagnostics;
+      if (obj.events !== undefined) return obj.events;
+      if (obj.diagnosticEvents !== undefined) return obj.diagnosticEvents;
+      if (obj.data !== undefined) return obj.data;
+      if (obj.detail !== undefined) return obj.detail;
+      if (typeof obj.error === "object" && obj.error !== null) {
+        const inner = obj.error as Record<string, unknown>;
+        if (inner.data !== undefined) return inner.data;
+        if (inner.detail !== undefined) return inner.detail;
+        if (inner.events !== undefined) return inner.events;
+      }
+    } catch {
+      // Ignore property access failures on hostile inputs
+    }
+  }
+  return undefined;
+}
+
 /**
  * Resolve an arbitrary contract failure into structured information.
  *
  * - Known codes resolve to the mapped message plus optional remediation.
  * - Unknown/unmapped codes preserve the original message and raw value.
  * - Malformed inputs never throw; they return `decoded: false`.
+ * - Raw diagnostic context is retained across all error shapes.
  *
  * @param error     - Raw failure value (HostError, Error, string, envelope…)
  * @param errorMap  - Custom mapping; defaults to the bundled factory/router map.
@@ -299,6 +331,7 @@ export function decodeContractError(
   errorMap: ContractErrorMap = DEFAULT_CONTRACT_ERROR_MAP,
 ): DecodedContractError {
   const candidates = extractCandidateCodes(error);
+  const diagnostic = extractDiagnosticContext(error);
 
   let originalMessage = "";
   if (typeof error === "string") {
@@ -306,11 +339,23 @@ export function decodeContractError(
   } else if (error instanceof Error) {
     originalMessage = error.message;
   } else if (error !== null && typeof error === "object") {
-    const msg = (error as { message?: unknown }).message;
-    const innerMsg = (error as { error?: { message?: unknown } }).error
-      ?.message;
-    if (typeof msg === "string") originalMessage = msg;
-    else if (typeof innerMsg === "string") originalMessage = innerMsg;
+    try {
+      const obj = error as Record<string, unknown>;
+      const msg = obj.message;
+      const errMsg = typeof obj.error === "string" ? obj.error : undefined;
+      const innerMsg =
+        obj.error !== null && typeof obj.error === "object"
+          ? (obj.error as Record<string, unknown>).message
+          : undefined;
+      const detail = typeof obj.detail === "string" ? obj.detail : undefined;
+
+      if (typeof msg === "string") originalMessage = msg;
+      else if (typeof innerMsg === "string") originalMessage = innerMsg;
+      else if (errMsg) originalMessage = errMsg;
+      else if (detail) originalMessage = detail;
+    } catch {
+      // Ignore throwing properties
+    }
   }
 
   for (const code of candidates) {
@@ -324,6 +369,7 @@ export function decodeContractError(
           ? { remediation: info.remediation }
           : {}),
         raw: error,
+        ...(diagnostic !== undefined ? { diagnostic } : {}),
       };
     }
   }
@@ -334,6 +380,7 @@ export function decodeContractError(
       code: candidates[0] ?? null,
       message: originalMessage || `Unmapped contract error: ${candidates[0]}`,
       raw: error,
+      ...(diagnostic !== undefined ? { diagnostic } : {}),
     };
   }
 
@@ -342,5 +389,6 @@ export function decodeContractError(
     code: null,
     message: originalMessage || "No decodable contract error information",
     raw: error,
+    ...(diagnostic !== undefined ? { diagnostic } : {}),
   };
 }
