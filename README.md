@@ -488,6 +488,34 @@ for await (const result of client.transaction.stream(publicKey, {
 }
 ```
 
+### Cursor persistence, reconnects, and deduplication
+
+Stream consumers can persist cursor positions across disconnects and restarts using `createCursorStore()` or `MemoryCursorStore`:
+
+```ts
+import { createCursorStore, PersistentEventDeduplicationStore } from "sorokit-core";
+
+const cursorStore = createCursorStore();
+const dedupStore = new PersistentEventDeduplicationStore();
+const cursorKey = `account:tx:${publicKey}`;
+
+let savedCursor = await cursorStore.load(cursorKey);
+
+for await (const result of client.transaction.stream(publicKey, { cursor: savedCursor })) {
+  if (result.status === "ok") {
+    for (const tx of result.data.transactions) {
+      if (await dedupStore.has(tx.hash)) continue;
+      await dedupStore.add(tx.hash);
+      processTransaction(tx);
+    }
+    if (result.data.nextCursor) {
+      await cursorStore.save(cursorKey, result.data.nextCursor);
+    }
+  }
+}
+```
+
+
 ### HTTP connection pooling
 
 Configure a bounded per-origin pool before creating Horizon or Soroban servers.
@@ -565,6 +593,29 @@ client.account.get.mockResolvedValueOnce(
 // Mock wallet adapter for signing flows
 const adapter = createMockWalletAdapter();
 ```
+
+#### Controllable Stream Testing
+
+Test streaming reconnect behavior, cursor advancement, and duplicate prevention with `createControllableStream`:
+
+```ts
+import { createControllableStream } from "sorokit-core/testing";
+
+const stream = createControllableStream<string>();
+
+// Emit items with cursors
+stream.emit("tx_1", "c1", "id_1");
+
+// Simulate network drops and resumes
+stream.disconnect(new Error("Network timeout"));
+stream.reconnect();
+
+// Consumers resume from last saved cursor
+for await (const { record, cursor, isDuplicate } of stream.consume({ cursor: "c1" })) {
+  console.log(record.data, cursor);
+}
+```
+
 
 > Requires `vitest` as a peer dependency.
 

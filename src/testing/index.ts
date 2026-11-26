@@ -23,3 +23,16 @@ export {
 export type { MockClientConfig, MockClientOverrides } from "./mockClient";
 export { setupMockServer, teardownMockServer, setupMockServerScenario } from "./mockServer";
 export type { MockServerScenario, MockServerOptions } from "./mockServer";
+export {
+  ControllableStream,
+  createControllableStream,
+  createMockHorizonStreamFetch,
+} from "./mockStream";
+export type {
+  MockStreamRecord,
+  ControllableStreamOptions,
+  StreamConsumerOptions,
+  StreamConsumerMessage,
+  MockHorizonStreamFetchOptions,
+} from "./mockStream";
+
